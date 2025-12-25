@@ -60,7 +60,7 @@ async function downloadAndSend(chatId: string, item: DownloadLink) {
     const tempFile = path.join(tmpdir(), `movie_${Date.now()}.mp4`);
     
     try {
-        await client.sendMessage(chatId, `🚀 Starting download: *${item.label}*\nPlease wait, this might take a few minutes...`);
+        await client.sendMessage(chatId, `🚀 Starting download: *${item.label}*\nPlease wait...`);
         
         const response = await axios({
             method: 'get',
@@ -70,7 +70,35 @@ async function downloadAndSend(chatId: string, item: DownloadLink) {
             httpsAgent: new https.Agent({ rejectUnauthorized: false })
         });
 
+        const totalBytes = parseInt(response.headers['content-length'] || '0');
+        let downloadedBytes = 0;
+        let lastLoggedProgress = -1;
+
         const writer = createWriteStream(tempFile);
+        
+        response.data.on('data', (chunk: Buffer) => {
+            downloadedBytes += chunk.length;
+            if (totalBytes > 0) {
+                const progress = Math.floor((downloadedBytes / totalBytes) * 100);
+                if (progress % 10 === 0 && progress !== lastLoggedProgress) {
+                    console.log(`Download progress for ${item.label}: ${progress}% (${(downloadedBytes / 1024 / 1024).toFixed(2)}MB / ${(totalBytes / 1024 / 1024).toFixed(2)}MB)`);
+                    
+                    // Send update to user every 25%
+                    if (progress % 25 === 0 && progress > 0 && progress < 100) {
+                        client.sendMessage(chatId, `⏳ Download progress: ${progress}%...`);
+                    }
+                    
+                    lastLoggedProgress = progress;
+                }
+            } else {
+                // If no content-length, just log the MBs in terminal
+                if (Math.floor(downloadedBytes / 1024 / 1024) % 10 === 0 && Math.floor(downloadedBytes / 1024 / 1024) !== lastLoggedProgress) {
+                   console.log(`Downloaded: ${(downloadedBytes / 1024 / 1024).toFixed(2)}MB`);
+                   lastLoggedProgress = Math.floor(downloadedBytes / 1024 / 1024);
+                }
+            }
+        });
+
         response.data.pipe(writer);
 
         await new Promise((resolve, reject) => {
@@ -78,11 +106,12 @@ async function downloadAndSend(chatId: string, item: DownloadLink) {
             writer.on('error', reject);
         });
 
+        console.log(`Download complete: ${item.label}`);
         await client.sendMessage(chatId, `✅ Download complete! Sending to you now...`);
         
         const media = MessageMedia.fromFilePath(tempFile);
         await client.sendMessage(chatId, media, { 
-            sendMediaAsDocument: true, // Send as document to avoid compression and 16MB limit
+            sendMediaAsDocument: true, 
             caption: `Here is your movie: ${item.label}`
         });
 
@@ -192,7 +221,7 @@ client.on('message', async (msg) => {
                                            .replace(/[._-]/g, ' ')
                                            .trim();
                     if (!cleanLabel.toLowerCase().includes(movie.title.toLowerCase())) {
-                        cleanLabel = `${movie.title} - ${cleanLabel}`;
+                        cleanLabel = `${movie.title} - ${cleanLabel} ${i+1}`;
                     }
                 }
 
