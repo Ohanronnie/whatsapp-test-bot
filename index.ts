@@ -15,10 +15,11 @@ import type { MovieSearchResult, DownloadLink } from './nkiri';
 const execPromise = promisify(exec);
 
 interface Session {
-    state: 'SEARCH_RESULTS' | 'EPISODE_SELECTION';
+    state: 'SEARCH_RESULTS' | 'EPISODE_SELECTION' | 'DOWNLOAD_METHOD_SELECTION';
     lastResults?: MovieSearchResult[];
     lastLinks?: DownloadLink[];
     selectedMovie?: MovieSearchResult;
+    selectedLink?: DownloadLink;
     timestamp: number;
 }
 
@@ -232,15 +233,39 @@ client.on('message', async (msg) => {
             return;
         }
 
-        // Handle Episode Selection -> Download & Send
+        // Handle Episode Selection -> Ask for Method
         if (session.state === 'EPISODE_SELECTION') {
             const link = session.lastLinks![selection - 1];
             if (!link) return msg.reply("Invalid selection.");
 
-            // Clear session to prevent double downloads
-            delete sessions[chatId];
+            session.state = 'DOWNLOAD_METHOD_SELECTION';
+            session.selectedLink = link;
+            session.timestamp = Date.now();
+
+            let choiceMenu = `❓ *How would you like to receive "${link.label}"?*\n\n`;
+            choiceMenu += "1. *Get Direct Link* (Fastest, no waiting)\n";
+            choiceMenu += "2. *Send as File* (⚠️ Risky & Not reliable)\n\n";
+            choiceMenu += "Reply with *1* or *2*.";
             
-            await downloadAndSend(chatId, link);
+            client.sendMessage(chatId, choiceMenu);
+            return;
+        }
+
+        // Handle Download Method Selection
+        if (session.state === 'DOWNLOAD_METHOD_SELECTION') {
+            const link = session.selectedLink!;
+            
+            if (selection === 1) {
+                // Option 1: Just send the link
+                await client.sendMessage(chatId, `✅ *Direct Download Link:*\n\n${link.url}\n\n_Note: Long-press to copy._`);
+                delete sessions[chatId];
+            } else if (selection === 2) {
+                // Option 2: Download and send
+                delete sessions[chatId];
+                await downloadAndSend(chatId, link);
+            } else {
+                msg.reply("Please reply with *1* for the link or *2* for the file.");
+            }
             return;
         }
     }
