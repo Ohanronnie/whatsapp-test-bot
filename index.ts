@@ -256,8 +256,8 @@ client.on('message', async (msg) => {
             const link = session.selectedLink!;
             
             if (selection === 1) {
-                // Option 1: Just send the link
-                await client.sendMessage(chatId, `✅ *Direct Download Link:*\n\n${link.url}\n\n_Note: Long-press to copy._`);
+                // Option 1: Just send the link alone
+                await client.sendMessage(chatId, link.url);
                 delete sessions[chatId];
             } else if (selection === 2) {
                 // Option 2: Download and send
