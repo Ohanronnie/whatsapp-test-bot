@@ -184,11 +184,11 @@ client.on('message', async (msg) => {
 
             client.sendMessage(chatId, `🎞️ Opening *${movie.title}*...`);
             
-            sendPeriodicUpdates(chatId, [
+            /*sendPeriodicUpdates(chatId, [
                 "Bypassing safe-links...",
                 "Searching for direct streams...",
                 "Extracting download keys..."
-            ]); // Removed await to run in background
+            ]);*/ // Removed await to run in background
 
             const links = await getDownloadLinks(movie.url);
             if (links.length === 0) return msg.reply("❌ No download links found.");
