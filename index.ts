@@ -11,6 +11,8 @@ import axios from 'axios';
 import https from 'https';
 import { searchNkiri, getDownloadLinks } from './nkiri';
 import type { MovieSearchResult, DownloadLink } from './nkiri';
+import { extractMediaUrl, downloadMedia, cleanupFile as cleanupMediaFile, getPlatformEmoji } from './media-downloader';
+import { removeBackground, cleanupFile as cleanupBgFile } from './background-remover';
 
 const execPromise = promisify(exec);
 
@@ -110,11 +112,27 @@ async function downloadAndSend(chatId: string, item: DownloadLink) {
         console.log(`Download complete: ${item.label}`);
         await client.sendMessage(chatId, `✅ Download complete! Sending to you now...`);
         
-        const media = MessageMedia.fromFilePath(tempFile);
+        // Extract filename from URL (last part after /)
+        let fileName: string = item.url.split('/').pop() || `${item.label}.mp4`;
+        // Remove query params
+        fileName = fileName.split('?')[0] || fileName;
+        // Ensure it has extension
+        if (!fileName.endsWith('.mp4') && !fileName.endsWith('.mkv')) {
+            fileName = `${fileName}.mp4`;
+        }
+        
+        // Rename temp file to proper filename
+        const finalFile = path.join(tmpdir(), fileName);
+        await fs.rename(tempFile, finalFile);
+        
+        const media = MessageMedia.fromFilePath(finalFile);
         await client.sendMessage(chatId, media, { 
             sendMediaAsDocument: true, 
             caption: `Here is your movie: ${item.label}`
         });
+        
+        // Cleanup the final file
+        try { await fs.unlink(finalFile); } catch (e) {}
 
     } catch (error) {
         console.error('Download Error:', error);
@@ -128,23 +146,67 @@ client.on('message', async (msg) => {
     const chatId = msg.from;
     const text = msg.body.trim().toLowerCase();
 
-    // 1. Handle GIF to Sticker
+    // 1. Handle GIF/Image to Sticker and Background Removal
     if (msg.hasMedia) {
         const media = await msg.downloadMedia();
-        if (media.mimetype === 'image/gif' || (media.mimetype === 'video/mp4' && msg.isGif)) {
-            client.sendMessage(chatId, "I'm coming boss 🫠");
-            const tempInput = path.join(tmpdir(), `input_${Date.now()}.${media.mimetype.split('/')[1]}`);
+        const isGif = media.mimetype === 'image/gif' || (media.mimetype === 'video/mp4' && msg.isGif);
+        const isImage = media.mimetype?.startsWith('image/') && !isGif;
+        
+        // Check for sticker command
+        const wantsSticker = text === 'sticker' || text === 's';
+        
+        // Check for background removal command
+        const wantsBgRemove = text === 'removebg' || text === 'rmbg' || text === 'nobg';
+        
+        // Auto-convert GIF or image with "sticker" caption
+        if (isGif || (isImage && wantsSticker)) {
+            await client.sendMessage(chatId, "🎨 Converting to sticker...");
+            const tempInput = path.join(tmpdir(), `input_${Date.now()}.${isGif ? 'mp4' : 'png'}`);
             const tempOutput = path.join(tmpdir(), `output_${Date.now()}.webp`);
             try {
                 await fs.writeFile(tempInput, media.data, 'base64');
-                await execPromise(`ffmpeg -i "${tempInput}" -vcodec libwebp -vf "scale=512:512:force_original_aspect_ratio=decrease,format=rgba,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=#00000000" -lossless 0 -compression_level 6 -q:v 50 -loop 0 -preset default -an -vsync 0 "${tempOutput}"`);
+                
+                if (isGif) {
+                    await execPromise(`ffmpeg -i "${tempInput}" -vcodec libwebp -vf "scale=512:512:force_original_aspect_ratio=decrease,format=rgba,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=#00000000" -lossless 0 -compression_level 6 -q:v 50 -loop 0 -preset default -an -vsync 0 "${tempOutput}"`);
+                } else {
+                    await execPromise(`ffmpeg -i "${tempInput}" -vf "scale=512:512:force_original_aspect_ratio=decrease,format=rgba,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=#00000000" -c:v libwebp -lossless 0 -compression_level 6 -q:v 80 "${tempOutput}"`);
+                }
+                
                 const outputData = await fs.readFile(tempOutput, { encoding: 'base64' });
                 const stickerMedia = new MessageMedia('image/webp', outputData, 'sticker.webp');
                 await client.sendMessage(chatId, stickerMedia, { sendMediaAsSticker: true, stickerName: "Bot", stickerAuthor: "Ronnie" });
             } catch (e) {
-                msg.reply("Error converting sticker.");
+                console.error('Sticker conversion error:', e);
+                msg.reply("❌ Error converting to sticker.");
             } finally {
                 try { await fs.unlink(tempInput); await fs.unlink(tempOutput); } catch (e) {}
+            }
+            return;
+        }
+        
+        // Background removal
+        if (isImage && wantsBgRemove) {
+            await client.sendMessage(chatId, "🔄 Removing background...\nThis may take a moment.");
+            const tempInput = path.join(tmpdir(), `bg_input_${Date.now()}.png`);
+            
+            try {
+                await fs.writeFile(tempInput, media.data, 'base64');
+                
+                const result = await removeBackground(tempInput);
+                
+                if (result.success && result.filePath) {
+                    const outputData = await fs.readFile(result.filePath, { encoding: 'base64' });
+                    const outputMedia = new MessageMedia('image/png', outputData, 'no_background.png');
+                    await client.sendMessage(chatId, outputMedia, { caption: "✅ Background removed!" });
+                    await cleanupBgFile(result.filePath);
+                } else {
+                    await client.sendMessage(chatId, `❌ ${result.error || 'Failed to remove background'}`);
+                }
+            } catch (e: any) {
+                console.error('Background removal error:', e);
+                await client.sendMessage(chatId, `❌ Error: ${e.message}`);
+            } finally {
+                try { await fs.unlink(tempInput); } catch (e) {}
             }
             return;
         }
@@ -270,11 +332,69 @@ client.on('message', async (msg) => {
         }
     }
 
+    // 4. Media Download (YouTube, Instagram, TikTok, Twitter)
+    const mediaMatch = extractMediaUrl(msg.body);
+    const wantsAudio = text.includes('audio') || text.includes('mp3') || text.includes('music');
+    
+    if (mediaMatch) {
+        const emoji = getPlatformEmoji(mediaMatch.platform);
+        const platformName = mediaMatch.platform.charAt(0).toUpperCase() + mediaMatch.platform.slice(1);
+        
+        await client.sendMessage(chatId, `${emoji} Downloading from ${platformName}...${wantsAudio ? ' (audio only)' : ''}\nThis may take a moment.`);
+        
+        const result = await downloadMedia(mediaMatch.url, wantsAudio);
+        
+        if (result.success && result.filePath) {
+            try {
+                const sizeMB = (await fs.stat(result.filePath)).size / (1024 * 1024);
+                
+                await client.sendMessage(chatId, `✅ Downloaded: *${result.title}*\n📁 Size: ${sizeMB.toFixed(2)}MB\nSending now...`);
+                
+                const media = MessageMedia.fromFilePath(result.filePath);
+                await client.sendMessage(chatId, media, {
+                    sendMediaAsDocument: result.isAudio,
+                    caption: `${emoji} ${result.title}`
+                });
+                
+            } catch (sendError: any) {
+                console.error('Error sending media:', sendError);
+                try {
+                    const media = MessageMedia.fromFilePath(result.filePath);
+                    await client.sendMessage(chatId, media, {
+                        sendMediaAsDocument: true,
+                        caption: `${emoji} ${result.title}`
+                    });
+                } catch (docError) {
+                    await client.sendMessage(chatId, `❌ Failed to send: ${sendError.message}`);
+                }
+            } finally {
+                await cleanupMediaFile(result.filePath);
+            }
+        } else {
+            await client.sendMessage(chatId, `❌ ${result.error || 'Failed to download'}`);
+        }
+        return;
+    }
+
     // Default Help
     if (!msg.hasMedia && !text.startsWith('search ')) {
-        client.sendMessage(chatId, "👋 *Menu*\n\n" +
-            "1. Send a GIF to get a sticker.\n" +
-            "2. Type `search <name>` to find movies.");
+        const helpMessage = `👋 *WhatsApp Bot Menu*
+
+📥 *Media Downloads*
+• Send a YouTube/Instagram/TikTok/Twitter link
+• Add "audio" or "mp3" for audio-only (YouTube)
+
+🎨 *Stickers*
+• Send a GIF → auto-converts to sticker
+• Send image with caption "sticker" or "s"
+
+🖼️ *Image Tools*
+• Send image with caption "removebg" or "nobg"
+
+🎬 *Movies*
+• Type \`search <movie name>\``;
+        
+        client.sendMessage(chatId, helpMessage);
     }
 });
 
