@@ -133,28 +133,8 @@ export async function downloadMedia(url: string, audioOnly: boolean = false): Pr
     } catch (error: any) {
         console.error(`${platform} download error:`, error);
         
-        // Handle common errors
-        if (error.message?.includes('not found') || error.code === 'ENOENT') {
-            return { success: false, error: 'yt-dlp is not installed. Please install it.' };
-        }
-        
-        if (error.message?.includes('Private') || error.message?.includes('protected')) {
-            return { success: false, error: 'This content is private or protected.' };
-        }
-        
-        if (error.message?.includes('unavailable') || error.message?.includes('deleted')) {
-            return { success: false, error: 'This content is unavailable or has been deleted.' };
-        }
-        
-        if (error.message?.includes('age')) {
-            return { success: false, error: 'This content is age-restricted.' };
-        }
-        
-        if (error.message?.includes('copyright')) {
-            return { success: false, error: 'This content is blocked due to copyright.' };
-        }
-        
-        return { success: false, error: error.message?.substring(0, 200) || 'Failed to download' };
+        // Return simple generic error for all failures
+        return { success: false, error: 'Invalid URL or no video found for this link.' };
     }
 }
 
