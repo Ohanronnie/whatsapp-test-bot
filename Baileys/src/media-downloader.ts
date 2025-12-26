@@ -54,6 +54,23 @@ export function extractMediaUrl(text: string): { url: string; platform: Platform
 }
 
 /**
+ * Extract filename from URL (last part after /)
+ */
+function getFilenameFromUrl(url: string, platform: Platform): string {
+    let filename = url.split('/').pop() || `${platform}_video`;
+    // Remove query params
+    filename = filename.split('?')[0].split('#')[0];
+    // If it's just an ID or not meaningful, use platform name
+    if (filename.length < 3 || (/^[a-zA-Z0-9_-]+$/.test(filename) && filename.length > 20)) {
+        filename = `${platform.charAt(0).toUpperCase() + platform.slice(1)}_${Date.now()}`;
+    }
+    // Remove extension if present
+    filename = filename.replace(/\.(mp4|webm|mkv|mp3|m4a)$/i, '');
+    // Limit length
+    return filename.substring(0, 100);
+}
+
+/**
  * Download media from YouTube, Instagram, TikTok, or Twitter using yt-dlp
  */
 export async function downloadMedia(url: string, audioOnly: boolean = false): Promise<MediaDownloadResult> {
@@ -64,16 +81,8 @@ export async function downloadMedia(url: string, audioOnly: boolean = false): Pr
     const outputTemplate = path.join(outputDir, `${prefix}_${timestamp}.%(ext)s`);
     
     try {
-        // Get video info first
-        const infoCmd = `yt-dlp --no-warnings --print title "${url}"`;
-        let title = `${platform.charAt(0).toUpperCase() + platform.slice(1)} Video`;
-        
-        try {
-            const { stdout } = await execPromise(infoCmd, { timeout: 30000 });
-            title = stdout.trim().substring(0, 100) || title;
-        } catch (e) {
-            console.log('Could not get video title, using default');
-        }
+        // Get title from URL
+        const title = getFilenameFromUrl(url, platform);
         
         // Build download command based on options
         let downloadCmd: string;

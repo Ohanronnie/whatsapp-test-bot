@@ -25,7 +25,6 @@ import { searchNkiri, getDownloadLinks } from './nkiri.js';
 import type { MovieSearchResult, DownloadLink } from './nkiri.js';
 import { extractMediaUrl, downloadMedia, cleanupFile as cleanupMediaFile, getPlatformEmoji, Platform } from './media-downloader.js';
 import { removeBackground, cleanupFile as cleanupBgFile } from './background-remover.js';
-import { chat, clearHistory, isAIConfigured } from './ai-chat.js';
 
 const execPromise = promisify(exec);
 
@@ -138,12 +137,21 @@ async function downloadAndSend(chatId: string, item: DownloadLink) {
         console.log(`Download complete: ${item.label}`);
         await sendTextMessage(chatId, `✅ Download complete! Sending to you now...`);
         
+        // Extract filename from URL (last part after /)
+        let fileName = item.url.split('/').pop() || `${item.label}.mp4`;
+        // Remove query params
+        fileName = fileName.split('?')[0];
+        // Ensure it has extension
+        if (!fileName.endsWith('.mp4') && !fileName.endsWith('.mkv')) {
+            fileName = `${fileName}.mp4`;
+        }
+        
         // Read file and send as document
         const fileBuffer = await fs.readFile(tempFile);
         await sendMessage(chatId, {
             document: fileBuffer,
             mimetype: 'video/mp4',
-            fileName: `${item.label}.mp4`,
+            fileName: fileName,
             caption: `Here is your movie: ${item.label}`
         });
 
@@ -456,38 +464,9 @@ async function handleMessage(chatId: string, message: proto.IWebMessageInfo) {
         return;
     }
 
-    // 5. AI Chat
-    // Trigger with "ai " prefix or "ask " prefix
-    if (text.startsWith('ai ') || text.startsWith('ask ')) {
-        const query = originalText.replace(/^(ai|ask)\s+/i, '').trim();
-        
-        if (!query) {
-            await sendTextMessage(chatId, "Usage: `ai <your question>`\nExample: `ai what is the capital of France?`");
-            return;
-        }
-        
-        await sendTextMessage(chatId, "🤖 Thinking...");
-        
-        const response = await chat(chatId, query);
-        
-        if (response.success && response.message) {
-            await sendTextMessage(chatId, response.message);
-        } else {
-            await sendTextMessage(chatId, `❌ ${response.error || 'Failed to get AI response'}`);
-        }
-        return;
-    }
-    
-    // Clear AI chat history
-    if (text === 'clear' || text === 'reset') {
-        clearHistory(chatId);
-        await sendTextMessage(chatId, "🧹 Chat history cleared!");
-        return;
-    }
-
     // Default Help
     const hasMedia = isGif || isImage;
-    if (!hasMedia && !text.startsWith('search ') && !text.startsWith('ai ') && !text.startsWith('ask ')) {
+    if (!hasMedia && !text.startsWith('search ')) {
         const helpMessage = `👋 *WhatsApp Bot Menu*
 
 📥 *Media Downloads*
@@ -502,13 +481,7 @@ async function handleMessage(chatId: string, message: proto.IWebMessageInfo) {
 • Send image with caption "removebg" or "nobg"
 
 🎬 *Movies*
-• Type \`search <movie name>\`
-
-🤖 *AI Chat*
-• Type \`ai <question>\` or \`ask <question>\`
-• Type \`clear\` to reset chat history
-
-${isAIConfigured() ? '✅ AI Chat is ready!' : '⚠️ AI Chat needs GEMINI_API_KEY'}`;
+• Type \`search <movie name>\``;
         
         await sendTextMessage(chatId, helpMessage);
     }
